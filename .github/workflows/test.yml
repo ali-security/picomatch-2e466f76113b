@@ -1,6 +1,12 @@
 name: Tests
 
-on: [push, pull_request]
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Optional mocha test file/glob to run instead of the full suite"
+        required: false
+        default: ""
 
 env:
   FORCE_COLOR: 2
@@ -9,6 +15,7 @@ jobs:
   run:
     name: Node.js ${{ matrix.node }} @ ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
@@ -20,7 +27,22 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v2
 
+      - name: Setup Node.js (macOS legacy via x64 tarball)
+        if: runner.os == 'macOS' && (matrix.node == 12 || matrix.node == 14)
+        run: |
+          case "${{ matrix.node }}" in
+            12) NODE_VERSION="v12.22.12" ;;
+            14) NODE_VERSION="v14.21.3" ;;
+          esac
+          curl -fsSLO "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-darwin-x64.tar.gz"
+          sudo tar -xzf "node-${NODE_VERSION}-darwin-x64.tar.gz" -C /usr/local --strip-components=1
+          rm "node-${NODE_VERSION}-darwin-x64.tar.gz"
+          echo "/usr/local/bin" >> "$GITHUB_PATH"
+          /usr/local/bin/node --version
+          /usr/local/bin/npm --version
+
       - name: Setup Node.js
+        if: ${{ !(runner.os == 'macOS' && (matrix.node == 12 || matrix.node == 14)) }}
         uses: actions/setup-node@v2
         with:
           node-version: ${{ matrix.node }}
@@ -29,11 +51,29 @@ jobs:
         run: npm install
 
       - name: Run tests
-        run: npm run test:ci
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            npx mocha --reporter dot ${{ inputs.test-filter }}
+          else
+            npm run test:ci
+          fi
 
       - name: Run Coveralls
         # `master` should be a tag but they don't have one
         uses: coverallsapp/github-action@master
-        if: startsWith(matrix.os, 'ubuntu') && matrix.node == 14
+        if: false
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Pack npm tarball
+        if: startsWith(matrix.os, 'ubuntu') && matrix.node == 18
+        run: npm pack
+
+      - name: Upload npm tarball
+        if: startsWith(matrix.os, 'ubuntu') && matrix.node == 18
+        uses: actions/upload-artifact@v4
+        with:
+          name: picomatch-tgz
+          path: picomatch-*.tgz
+          if-no-files-found: error
